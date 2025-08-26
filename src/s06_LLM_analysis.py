@@ -1,28 +1,29 @@
 import transformers
-# from transformers import AutoModelForQuestionAnswering, AutoTokenizer
-import os
 import torch
 from transformers import BitsAndBytesConfig
 
 from s05_data_preparation import aggregate_data
+import pandas as pd
 
 
 def analyze_text_with_llm(text):
-    # model_id = "Qwen/Qwen3-4B"
-    model_id = "Qwen/Qwen2.5-7B"
+    model_id = "Qwen/Qwen3-4B"
+    # model_id = "Qwen/Qwen2.5-7B"
     # model_id = "openai/gpt-oss-20b"
     # model_id = "meta-llama/Llama-3.3-70B-Instruct" # Too big, requires more resources
     # model_id = "Qwen/Qwen2.5-72B-Instruct"
 
     quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16
+        load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
     )
 
     pipeline = transformers.pipeline(
         "text-generation",
         model=model_id,
-        model_kwargs={"torch_dtype": torch.bfloat16, "quantization_config": quantization_config},
+        model_kwargs={
+            "torch_dtype": torch.bfloat16,
+            "quantization_config": quantization_config,
+        },
         device_map="auto",
     )
 
@@ -31,16 +32,13 @@ def analyze_text_with_llm(text):
     # text_chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
     text_chunks = text.split("#####")
-    text_chunks = [chunk.strip() for chunk in text_chunks if chunk.strip()]
-    # Count characters per chunk
-    for i, chunk in enumerate(text_chunks):
-        char_count = len(chunk)
-        print(f"Chunk {i+1}: {char_count} characters")
-    
+    # text_chunks = [chunk.strip() for chunk in text_chunks if chunk.strip()]
+
     # 2. Map Step: Process all chunks in a single batch for efficiency
     print(f"Processing {len(text_chunks)} chunks in a batch...")
-    
-    summary_prompts = [f"""
+
+    summary_prompts = [
+        f"""
     ### Instruction:
     Read the text bellow. State only the number of participants in the scientific paper and nothing more. If it is paper without participants list NA.
 
@@ -48,36 +46,18 @@ def analyze_text_with_llm(text):
     {chunk}
 
     ### Response:
-    """ for chunk in text_chunks]
-    # summary_prompts = [f"""
-    # Objective: Analyze the following text chunk and extract all information related to the sample size (number of patients) of studies that investigate the link between pathogenic DNA variants and diseases, especially cancer.
+    """
+        for chunk in text_chunks
+    ]
 
-    # Instructions:
-    # From the text provided below, please identify and list the following details:
-
-    # Specific Numbers: Any mention of the number of patients, participants, subjects, cases, or controls in a study.
-
-    # Context of the Study: The study must be about a demonstrated link between a DNA variant (or mutation) and a disease. Note if the disease is specified as oncological/cancer.
-
-    # Qualitative Descriptions: Extract any descriptive terms for sample size, such as "small cohorts," "large-scale studies," "family studies," or "population-based studies."
-
-    # Averages or Ranges: If the text mentions an average sample size, or a typical range of patient numbers for such studies, extract that information.
-
-    # Output Format:
-    # Present the extracted information as a concise list. If no relevant information is found in this chunk, please state: "No relevant information found in this chunk."
-
-    # Input text:
-    # {chunk}
-
-    # ### Response:
-    # """ for chunk in text_chunks]
-
-    responses = pipeline(summary_prompts, max_new_tokens=256, num_return_sequences=1)
+    responses = pipeline(
+        summary_prompts, max_new_tokens=256, num_return_sequences=1
+    )
 
     summaries = []
     for i, response in enumerate(responses):
         prompt = summary_prompts[i]
-        summary = response[0]["generated_text"][len(prompt):].strip()
+        summary = response[0]["generated_text"][len(prompt) :].strip()
         print(f"Summary for chunk {i+1}: {summary}")
         summaries.append(summary)
 
@@ -91,14 +71,11 @@ def analyze_text_with_llm(text):
 
     ### Input Text:
     {combined_summaries}
-
-    ### Response:
-    Paper 1:
-    Paper 2:
-    ...
     """
 
-    response = pipeline(final_prompt, max_new_tokens=512, num_return_sequences=1)
+    response = pipeline(
+        final_prompt, max_new_tokens=512, num_return_sequences=1
+    )
     analysis = response[0]["generated_text"][len(final_prompt) :]
 
     if model_id == "openai/gpt-oss-20b":
@@ -108,12 +85,33 @@ def analyze_text_with_llm(text):
     return analysis
 
 
+def analyze_random_10():
+    """Randomly pick 10 variations from data/clinvar_csv_dataset.csv and analyze them using llm."""
+    df = pd.read_csv('data/clinvar_csv_dataset.csv')
+    random_10 = df.sample(n=min(10, len(df)), random_state=42)
+
+    for _, row in random_10.iterrows():
+        variation_id = row['VariationID']
+        print(f"Processing variation {variation_id}...")
+        data = aggregate_data(variation_id)
+        analysis_results = analyze_text_with_llm(data)
+        print(f"Analysis for variation {variation_id}:")
+        print(analysis_results)
+        print("-" * 50)
+        # Write analysis to file (append to same file for all variations)
+        with open("all_variations_analysis.txt", 'a') as f:
+            f.write(f"Analysis for variation {variation_id}:\n")
+            f.write(analysis_results)
+            f.write("\n" + "-" * 50 + "\n")
+
+
 def main():
-    variation_id = 3254
-    data = aggregate_data(variation_id)
-    analysis_results = analyze_text_with_llm(data)
-    print("Analysis Results:")
-    print(analysis_results)
+    # variation_id = 3254
+    # data = aggregate_data(variation_id)
+    # analysis_results = analyze_text_with_llm(data)
+    # print("Analysis Results:")
+    # print(analysis_results)
+    analyze_random_10()
 
 
 if __name__ == "__main__":
