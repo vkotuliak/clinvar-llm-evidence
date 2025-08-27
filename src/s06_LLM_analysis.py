@@ -6,52 +6,61 @@ from s05_data_preparation import aggregate_data
 import pandas as pd
 
 
-def analyze_text_with_llm(text):
-    model_id = "Qwen/Qwen3-4B"
-    # model_id = "Qwen/Qwen2.5-7B"
-    # model_id = "openai/gpt-oss-20b"
-    # model_id = "meta-llama/Llama-3.3-70B-Instruct" # Too big, requires more resources
-    # model_id = "Qwen/Qwen2.5-72B-Instruct"
+def analyze_text_with_llm(text, model_id) -> str:
+    """Analyze text using a specified LLM model."""
 
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
     )
 
-    pipeline = transformers.pipeline(
-        "text-generation",
-        model=model_id,
-        model_kwargs={
-            "torch_dtype": torch.bfloat16,
-            "quantization_config": quantization_config,
-        },
-        device_map="auto",
-    )
-
-    # 1. Split the text into manageable chunks
-    # chunk_size = 500000
-    # text_chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    if model_id == "google/medgemma-4b-it":
+        pipeline = transformers.pipeline(
+            "image-text-to-text",
+            model=model_id,
+            model_kwargs={
+                "torch_dtype": torch.bfloat16,
+                "quantization_config": quantization_config,
+            },
+            device_map="auto",
+        )
+    else:
+        pipeline = transformers.pipeline(
+            "text-generation",
+            model=model_id,
+            model_kwargs={
+                "torch_dtype": torch.bfloat16,
+                "quantization_config": quantization_config,
+            },
+            device_map="auto",
+        )
 
     text_chunks = text.split("#####")
-    # text_chunks = [chunk.strip() for chunk in text_chunks if chunk.strip()]
+    # for i, chunk in enumerate(text_chunks):
+    #     char_count = len(chunk)
+    #     print(f"Chunk {i+1}: {char_count} characters")
+
 
     # 2. Map Step: Process all chunks in a single batch for efficiency
     print(f"Processing {len(text_chunks)} chunks in a batch...")
-
     summary_prompts = [
         f"""
-    ### Instruction:
-    Read the text bellow. State only the number of participants in the scientific paper and nothing more. If it is paper without participants list NA.
-
     ### Input Text:
-    {chunk}
+    {text_chunks[8]}
 
-    ### Response:
+    From the text above find the information about number of participants in the study.
+    List ONLY the number of participants in specified JSON format:
+
+    ```
+    {{
+      "number_of_participants": "..."
+    }}
+    ```
     """
-        for chunk in text_chunks
+        # for chunk in text_chunks
     ]
 
     responses = pipeline(
-        summary_prompts, max_new_tokens=256, num_return_sequences=1
+        summary_prompts, max_new_tokens=512, num_return_sequences=1
     )
 
     summaries = []
@@ -59,30 +68,33 @@ def analyze_text_with_llm(text):
         prompt = summary_prompts[i]
         summary = response[0]["generated_text"][len(prompt) :].strip()
         print(f"Summary for chunk {i+1}: {summary}")
+        return summary
         summaries.append(summary)
+    print(f"All summaries: {summaries}")
 
     # 3. Reduce Step: Synthesize the summaries
-    print("Synthesizing final themes...")
-    combined_summaries = "\n\n---\n\n".join(summaries)
+    print("FINITO")
+    # print("Synthesizing final themes...")
+    # combined_summaries = "\n\n---\n\n".join(summaries)
 
-    final_prompt = f"""
-    ### Instruction:
-    Read the text provided below. List only the number of participants in each paper. If it isn't study with participants list NA.
+    # final_prompt = f"""
+    # ### Instruction:
+    # Read the text provided below. List only the number of participants in each paper. If it isn't study with participants list NA.
 
-    ### Input Text:
-    {combined_summaries}
-    """
+    # ### Input Text:
+    # {combined_summaries}
+    # """
 
-    response = pipeline(
-        final_prompt, max_new_tokens=512, num_return_sequences=1
-    )
-    analysis = response[0]["generated_text"][len(final_prompt) :]
+    # response = pipeline(
+    #     final_prompt, max_new_tokens=512, num_return_sequences=1
+    # )
+    # analysis = response[0]["generated_text"][len(final_prompt) :]
 
-    if model_id == "openai/gpt-oss-20b":
-        keyword = ".assistantfinal"
-        analysis = analysis[analysis.find(keyword) + len(keyword) :].strip()
+    # if model_id == "openai/gpt-oss-20b":
+    #     keyword = ".assistantfinal"
+    #     analysis = analysis[analysis.find(keyword) + len(keyword) :].strip()
 
-    return analysis
+    return summaries
 
 
 def analyze_random_10():
@@ -106,12 +118,19 @@ def analyze_random_10():
 
 
 def main():
-    # variation_id = 3254
-    # data = aggregate_data(variation_id)
-    # analysis_results = analyze_text_with_llm(data)
-    # print("Analysis Results:")
-    # print(analysis_results)
-    analyze_random_10()
+    # model_id = "Qwen/Qwen3-4B"
+    # model_id = "google/medgemma-4b-it"
+    # model_id = "Qwen/Qwen2.5-7B"
+    # model_id = "BioMistral/BioMistral-7B" # context window is too small :(
+    # model_id = "openai/gpt-oss-20b"
+    # model_id = "meta-llama/Llama-3.3-70B-Instruct" # Too big, requires more resources
+    model_id = "Qwen/Qwen2.5-72B-Instruct"
+    variation_id = 306
+    data = aggregate_data(variation_id)
+    analysis_results = analyze_text_with_llm(data, model_id)
+    print("Analysis Results:")
+    print(analysis_results)
+    # analyze_random_10()
 
 
 if __name__ == "__main__":

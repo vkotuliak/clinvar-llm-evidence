@@ -83,8 +83,8 @@ def aggregate_data(variation_id: int) -> str:
             if not row["Abstract"].empty:
                 outcome += str(row["Abstract"].values[0]) + "\n"
 
-    # with open(f"aggregated_data_{variation_id}.txt", "w", encoding="utf-8") as f:
-    #     f.write(outcome)
+    with open(f"aggregated_data_{variation_id}.txt", "w", encoding="utf-8") as f:
+        f.write(outcome)
     return outcome
 
 
