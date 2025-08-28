@@ -45,7 +45,7 @@ def analyze_text_with_llm(text, model_id) -> str:
     summary_prompts = [
         f"""
     ### Input Text:
-    {text_chunks[8]}
+    {text_chunks[1]}
 
     From the text above find the information about number of participants in the study.
     List ONLY the number of participants in specified JSON format:

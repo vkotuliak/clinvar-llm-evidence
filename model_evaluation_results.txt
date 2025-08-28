@@ -1,0 +1,13 @@
+Evaluation run at: 2025-08-27 17:07:10
+{'google/medgemma-4b-it': 0, 'Qwen/Qwen3-4B': 0, 'Qwen/Qwen2.5-7B': 0, 'Qwen/Qwen2.5-72B-Instruct': 1, 'BioMistral/BioMistral-7B': 0, 'meta-llama/Llama-3.3-70B-Instruct': 0}
+
+========================================
+Evaluation run at: 2025-08-27 20:49:03
+{'google/medgemma-4b-it': 0, 'Qwen/Qwen3-4B': 0, 'Qwen/Qwen2.5-7B': 1, 'Qwen/Qwen2.5-72B-Instruct': 5, 'BioMistral/BioMistral-7B': 0}
+========================================
+Evaluation run at: 2025-08-28 10:12:39
+{'google/medgemma-4b-it': 0, 'Qwen/Qwen3-4B': 1, 'Qwen/Qwen2.5-7B': 0, 'Qwen/Qwen2.5-72B-Instruct': 1, 'BioMistral/BioMistral-7B': 0}
+========================================
+Evaluation run at: 2025-08-28 10:20:46
+{'google/medgemma-4b-it': 1, 'Qwen/Qwen3-4B': 1, 'Qwen/Qwen2.5-7B': 0, 'Qwen/Qwen2.5-72B-Instruct': 1, 'BioMistral/BioMistral-7B': 0}
+========================================

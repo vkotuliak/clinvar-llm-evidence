@@ -123,7 +123,7 @@ def remove_stopwords_and_lemmatize(text: str) -> str:
 
 
 def main():
-    variation_id = 306
+    variation_id = 3254
     aggregated_data = aggregate_data(variation_id)
     # cleaned_data = remove_stopwords_and_lemmatize(aggregated_data)
     print(f"Cleaned Data for Variation ID {variation_id}:\n{aggregated_data}")
