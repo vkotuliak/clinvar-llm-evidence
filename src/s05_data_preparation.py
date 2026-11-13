@@ -1,31 +1,22 @@
-import pandas as pd
+"""Stage 5: build one text document per variant (ClinVar comments + abstract or full text per cited paper).
+
+Papers are separated by ``PAPER_SEPARATOR`` so the LLM stage can process them one by one.
+"""
+
 import ast
-import nltk
-from pathlib import Path
-import sys
+from functools import lru_cache
 
-from nltk.corpus import stopwords, wordnet
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
+import pandas as pd
 
-from s04_extract_pdfs import extract_pdf_content
-from unstructured.cleaners.core import group_broken_paragraphs
+from src.config import AGGREGATED_DIR, CLINVAR_CSV, PUBMED_ABSTRACTS_CSV
+from src.s04_extract_pdfs import doi_to_pdf_path, extract_pdf_content
+from src.text_cleaning import clean_raw_text, group_broken_paragraphs
 
-project_root = str(Path(__file__).resolve().parents[1])
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
-from scripts.structure_data import clean_raw_text
-
-# nltk.download('punkt')
-# nltk.download('punkt_tab')
-# nltk.download('stopwords')
-# nltk.download('wordnet')
-# nltk.download('averaged_perceptron_tagger_eng')
+PAPER_SEPARATOR = "#####"
 
 
-def safe_literal_eval(s):
-    """Safely evaluate a string to a Python literal, handling NaNs and errors."""
+def safe_literal_eval(s) -> list:
+    """Parse a stringified Python list from the CSV; NaN or malformed values become ``[]``."""
     if pd.isna(s):
         return []
     try:
@@ -34,100 +25,59 @@ def safe_literal_eval(s):
         return []
 
 
-def aggregate_data(variation_id: int) -> str:
-    """Aggregate data from comments, abstracts, and citations for a given variation ID."""
-    outcome = ""
+@lru_cache(maxsize=1)
+def _clinvar_index() -> pd.DataFrame:
+    """Load the (large) ClinVar CSV once and index it by VariationID."""
+    df = pd.read_csv(CLINVAR_CSV, usecols=["VariationID", "Comment", "Citations"])
+    return df.set_index("VariationID")
 
-    clinvar_df = pd.read_csv("data/clinvar_csv_dataset.csv")
-    clinvar_df_filtered = clinvar_df[clinvar_df["VariationID"] == variation_id]
 
-    comment = clinvar_df_filtered["Comment"].values[0]
-    comment = ast.literal_eval(comment)
-    outcome += "COMMENT:" + "\n"
-    outcome += ". ".join(comment) if comment else "Not Provided" + "\n"
+@lru_cache(maxsize=1)
+def _abstracts_index() -> pd.DataFrame:
+    df = pd.read_csv(PUBMED_ABSTRACTS_CSV, dtype={"PMID": int})
+    return df.drop_duplicates("PMID").set_index("PMID")
 
-    outcome += "\n" + "---" + "\n"
 
-    abstracts_df = pd.read_csv("data/pubmed_abstracts.csv")
-    pubmed_ids = clinvar_df_filtered["Citations"].values[0]
-    pubmed_ids = ast.literal_eval(pubmed_ids)
+def paper_text(pmid: int, abstracts: pd.DataFrame) -> str:
+    """Full text of the paper if its PDF is available and readable, otherwise its abstract."""
+    if pmid not in abstracts.index:
+        return "ABSTRACT:\nNot available\n"
+    row = abstracts.loc[pmid]
 
-    counter = 0
-    for pubmed_id in pubmed_ids:
-        outcome += "#####" + "\n"
-        outcome += f"PAPER {counter + 1}" + "\n"
-        counter += 1
-        row = abstracts_df.loc[
-            abstracts_df["PMID"] == int(pubmed_id), ["Abstract", "DOI"]
-        ]
+    doi = row.get("DOI")
+    if isinstance(doi, str) and doi:
+        pdf_content = extract_pdf_content(doi_to_pdf_path(doi))
+        if pdf_content and pdf_content.strip():
+            return "FULL PAPER TEXT:\n" + clean_raw_text(group_broken_paragraphs(pdf_content)) + "\n"
 
-        if not row["DOI"].empty:
-            doi = (
-                str(row["DOI"].values[0])
-                .replace("https://doi.org/", "")
-                .replace("/", "%2F")
-                + ".pdf"
-            )
-            doi = "papers_by_doi/" + doi
-            pdf_content = extract_pdf_content(doi)
-            if pdf_content == "Not Provided \n" and not row["Abstract"].empty:
-                outcome += "ABSTRACT:" + "\n"
-                outcome += str(row["Abstract"].values[0]) + "\n"
-            else:
-                outcome += "FULL PAPER TEXT:" + "\n"
-                pdf_content = group_broken_paragraphs(pdf_content)
-                pdf_content = clean_raw_text(pdf_content)
-                outcome += pdf_content + "\n"
-        else:
-            outcome += "ABSTRACT:" + "\n"
-            if not row["Abstract"].empty:
-                outcome += str(row["Abstract"].values[0]) + "\n"
+    abstract = row.get("Abstract")
+    abstract = abstract if isinstance(abstract, str) and abstract.strip() else "Not available"
+    return "ABSTRACT:\n" + abstract + "\n"
 
-    with open(f"aggregated_data_{variation_id}.txt", "w", encoding="utf-8") as f:
-        f.write(outcome)
+
+def aggregate_data(variation_id: int, save: bool = True) -> str:
+    """Aggregate ClinVar comments and the text of every cited paper for one variant."""
+    clinvar = _clinvar_index()
+    if variation_id not in clinvar.index:
+        raise KeyError(f"VariationID {variation_id} not found in {CLINVAR_CSV}")
+    row = clinvar.loc[variation_id]
+
+    comments = safe_literal_eval(row["Comment"])
+    parts = ["COMMENT:", ". ".join(comments) if comments else "Not Provided", "---"]
+
+    abstracts = _abstracts_index()
+    for i, pmid in enumerate(safe_literal_eval(row["Citations"]), start=1):
+        parts.append(f"{PAPER_SEPARATOR}\nPAPER {i}\n{paper_text(int(pmid), abstracts)}")
+
+    outcome = "\n".join(parts) + "\n"
+    if save:
+        AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
+        (AGGREGATED_DIR / f"aggregated_data_{variation_id}.txt").write_text(outcome, encoding="utf-8")
     return outcome
 
 
-def get_wordnet_pos(treebank_tag):
-    """Convert treebank tags to wordnet tags."""
-    if treebank_tag.startswith("J"):
-        return wordnet.ADJ  # adjective
-    elif treebank_tag.startswith("V"):
-        return wordnet.VERB  # verb
-    elif treebank_tag.startswith("N"):
-        return wordnet.NOUN  # noun
-    elif treebank_tag.startswith("R"):
-        return wordnet.ADV  # adverb
-    else:
-        return wordnet.NOUN  # default to noun
-
-
-def remove_stopwords_and_lemmatize(text: str) -> str:
-    """Remove stopwords from a given text and lemmatize the remaining words."""
-
-    lemmatizer = WordNetLemmatizer()
-    stop_words = set(stopwords.words("english"))
-
-    tokens = word_tokenize(text)
-    tagged_tokens = nltk.pos_tag(tokens)
-    filtered_and_lemmatized_tokens = []
-
-    for word, tag in tagged_tokens:
-        clean_word = word.lower()  # TODO: this might lower accuracy of model
-        if clean_word.isalpha() and clean_word not in stop_words:
-            pos = get_wordnet_pos(tag)
-            lemmatized_word = lemmatizer.lemmatize(clean_word, pos)
-            filtered_and_lemmatized_tokens.append(lemmatized_word)
-
-    return " ".join(filtered_and_lemmatized_tokens)
-
-
-def main():
-    variation_id = 3254
-    aggregated_data = aggregate_data(variation_id)
-    # cleaned_data = remove_stopwords_and_lemmatize(aggregated_data)
-    print(f"Cleaned Data for Variation ID {variation_id}:\n{aggregated_data}")
-
-
 if __name__ == "__main__":
-    main()
+    import sys
+
+    vid = int(sys.argv[1]) if len(sys.argv) > 1 else 3254
+    print(aggregate_data(vid))

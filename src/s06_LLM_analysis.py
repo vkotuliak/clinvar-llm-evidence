@@ -1,137 +1,180 @@
-import transformers
-import torch
-from transformers import BitsAndBytesConfig
+"""Stage 6: LLM client + per-paper information extraction.
 
-from s05_data_preparation import aggregate_data
-import pandas as pd
+``LLMClient`` hides two backends behind one ``chat()`` call:
+
+* ``ollama`` (default) - local quantised models via the Ollama HTTP API; works on a laptop.
+* ``hf``              - Hugging Face transformers, 4-bit on CUDA when available; for GPU servers.
+
+Models are loaded once per client, prompts go through the model's chat template, and
+generation is deterministic (temperature 0, fixed seed) so repeated runs are comparable.
+"""
+
+import json
+import re
+import time
+from dataclasses import dataclass, field
+
+import requests
+
+from src.s05_data_preparation import PAPER_SEPARATOR, aggregate_data
+
+OLLAMA_URL = "http://localhost:11434"
 
 
-def analyze_text_with_llm(text, model_id) -> str:
-    """Analyze text using a specified LLM model."""
+@dataclass
+class LLMResponse:
+    text: str
+    latency_s: float
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
 
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
-    )
 
-    if model_id == "google/medgemma-4b-it":
-        pipeline = transformers.pipeline(
-            "image-text-to-text",
-            model=model_id,
-            model_kwargs={
-                "torch_dtype": torch.bfloat16,
-                "quantization_config": quantization_config,
+@dataclass
+class LLMClient:
+    model: str
+    backend: str = "ollama"
+    temperature: float = 0.0
+    seed: int = 42
+    num_ctx: int = 8192
+    max_new_tokens: int = 512
+    host: str = OLLAMA_URL
+    _hf: tuple | None = field(default=None, init=False, repr=False)
+
+    def chat(self, messages: list[dict], json_schema: dict | None = None) -> LLMResponse:
+        if self.backend == "ollama":
+            return self._chat_ollama(messages, json_schema)
+        if self.backend == "hf":
+            return self._chat_hf(messages)
+        raise ValueError(f"Unknown backend {self.backend!r}")
+
+    # -- Ollama ---------------------------------------------------------------------------
+    def _chat_ollama(self, messages, json_schema) -> LLMResponse:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": self.temperature,
+                "seed": self.seed,
+                # Ollama silently truncates prompts longer than num_ctx, so set it explicitly.
+                "num_ctx": self.num_ctx,
+                "num_predict": self.max_new_tokens,
             },
-            device_map="auto",
+        }
+        if json_schema is not None:
+            payload["format"] = json_schema
+        start = time.perf_counter()
+        r = requests.post(f"{self.host}/api/chat", json=payload, timeout=900)
+        r.raise_for_status()
+        body = r.json()
+        return LLMResponse(
+            text=body["message"]["content"],
+            latency_s=time.perf_counter() - start,
+            prompt_tokens=body.get("prompt_eval_count"),
+            output_tokens=body.get("eval_count"),
         )
-    else:
-        pipeline = transformers.pipeline(
-            "text-generation",
-            model=model_id,
-            model_kwargs={
-                "torch_dtype": torch.bfloat16,
-                "quantization_config": quantization_config,
-            },
-            device_map="auto",
+
+    # -- Hugging Face ---------------------------------------------------------------------
+    def _load_hf(self):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+        kwargs = {"device_map": "auto", "torch_dtype": torch.bfloat16}
+        if torch.cuda.is_available():
+            kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16
+            )
+        tokenizer = AutoTokenizer.from_pretrained(self.model)
+        model = AutoModelForCausalLM.from_pretrained(self.model, **kwargs)
+        torch.manual_seed(self.seed)
+        return tokenizer, model
+
+    def _chat_hf(self, messages) -> LLMResponse:
+        if self._hf is None:
+            self._hf = self._load_hf()
+        tokenizer, model = self._hf
+        start = time.perf_counter()
+        inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(
+            model.device
+        )
+        gen_kwargs = {"max_new_tokens": self.max_new_tokens, "do_sample": self.temperature > 0}
+        if self.temperature > 0:
+            gen_kwargs["temperature"] = self.temperature
+        output = model.generate(inputs, **gen_kwargs)
+        new_tokens = output[0, inputs.shape[-1] :]
+        return LLMResponse(
+            text=tokenizer.decode(new_tokens, skip_special_tokens=True),
+            latency_s=time.perf_counter() - start,
+            prompt_tokens=int(inputs.shape[-1]),
+            output_tokens=int(new_tokens.shape[-1]),
         )
 
-    text_chunks = text.split("#####")
-    # for i, chunk in enumerate(text_chunks):
-    #     char_count = len(chunk)
-    #     print(f"Chunk {i+1}: {char_count} characters")
+
+_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 
-    # 2. Map Step: Process all chunks in a single batch for efficiency
-    print(f"Processing {len(text_chunks)} chunks in a batch...")
-    summary_prompts = [
-        f"""
-    ### Input Text:
-    {text_chunks[1]}
-
-    From the text above find the information about number of participants in the study.
-    List ONLY the number of participants in specified JSON format:
-
-    ```
-    {{
-      "number_of_participants": "..."
-    }}
-    ```
-    """
-        # for chunk in text_chunks
-    ]
-
-    responses = pipeline(
-        summary_prompts, max_new_tokens=512, num_return_sequences=1
-    )
-
-    summaries = []
-    for i, response in enumerate(responses):
-        prompt = summary_prompts[i]
-        summary = response[0]["generated_text"][len(prompt) :].strip()
-        print(f"Summary for chunk {i+1}: {summary}")
-        return summary
-        summaries.append(summary)
-    print(f"All summaries: {summaries}")
-
-    # 3. Reduce Step: Synthesize the summaries
-    print("FINITO")
-    # print("Synthesizing final themes...")
-    # combined_summaries = "\n\n---\n\n".join(summaries)
-
-    # final_prompt = f"""
-    # ### Instruction:
-    # Read the text provided below. List only the number of participants in each paper. If it isn't study with participants list NA.
-
-    # ### Input Text:
-    # {combined_summaries}
-    # """
-
-    # response = pipeline(
-    #     final_prompt, max_new_tokens=512, num_return_sequences=1
-    # )
-    # analysis = response[0]["generated_text"][len(final_prompt) :]
-
-    # if model_id == "openai/gpt-oss-20b":
-    #     keyword = ".assistantfinal"
-    #     analysis = analysis[analysis.find(keyword) + len(keyword) :].strip()
-
-    return summaries
+def parse_json_response(text: str) -> dict | None:
+    """Extract the first JSON object from a model answer (tolerates code fences and chatter)."""
+    if not text:
+        return None
+    match = _JSON_OBJECT.search(text)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
-def analyze_random_10():
-    """Randomly pick 10 variations from data/clinvar_csv_dataset.csv and analyze them using llm."""
-    df = pd.read_csv('data/clinvar_csv_dataset.csv')
-    random_10 = df.sample(n=min(10, len(df)), random_state=42)
+# -- Per-paper extraction: number of study participants ------------------------------------
 
-    for _, row in random_10.iterrows():
-        variation_id = row['VariationID']
-        print(f"Processing variation {variation_id}...")
-        data = aggregate_data(variation_id)
-        analysis_results = analyze_text_with_llm(data)
-        print(f"Analysis for variation {variation_id}:")
-        print(analysis_results)
-        print("-" * 50)
-        # Write analysis to file (append to same file for all variations)
-        with open("all_variations_analysis.txt", 'a') as f:
-            f.write(f"Analysis for variation {variation_id}:\n")
-            f.write(analysis_results)
-            f.write("\n" + "-" * 50 + "\n")
+PARTICIPANTS_SCHEMA = {
+    "type": "object",
+    "properties": {"number_of_participants": {"type": ["integer", "null"]}},
+    "required": ["number_of_participants"],
+}
+
+PARTICIPANTS_PROMPT = """Read the scientific text below and report how many human participants \
+(patients, probands, family members or controls) were studied. Answer null if the paper is not \
+a study with participants.
+
+Answer ONLY with JSON: {{"number_of_participants": <integer or null>}}
+
+### Text
+{text}"""
 
 
-def main():
-    # model_id = "Qwen/Qwen3-4B"
-    # model_id = "google/medgemma-4b-it"
-    # model_id = "Qwen/Qwen2.5-7B"
-    # model_id = "BioMistral/BioMistral-7B" # context window is too small :(
-    # model_id = "openai/gpt-oss-20b"
-    # model_id = "meta-llama/Llama-3.3-70B-Instruct" # Too big, requires more resources
-    model_id = "Qwen/Qwen2.5-72B-Instruct"
-    variation_id = 306
-    data = aggregate_data(variation_id)
-    analysis_results = analyze_text_with_llm(data, model_id)
-    print("Analysis Results:")
-    print(analysis_results)
-    # analyze_random_10()
+def split_papers(aggregated_text: str) -> list[str]:
+    """Split the output of ``aggregate_data`` into one chunk per cited paper (drops the comment header)."""
+    return [c.strip() for c in aggregated_text.split(PAPER_SEPARATOR)[1:] if c.strip()]
+
+
+def extract_participants(paper_text: str, client: LLMClient) -> int | None:
+    messages = [{"role": "user", "content": PARTICIPANTS_PROMPT.format(text=paper_text)}]
+    answer = parse_json_response(client.chat(messages, json_schema=PARTICIPANTS_SCHEMA).text)
+    value = (answer or {}).get("number_of_participants")
+    if isinstance(value, str):
+        value = int(value.replace(",", "")) if value.replace(",", "").isdigit() else None
+    return value if isinstance(value, int) else None
+
+
+def analyze_variation(variation_id: int, client: LLMClient) -> list[int | None]:
+    """Participant count for every paper cited by a ClinVar variation."""
+    papers = split_papers(aggregate_data(variation_id))
+    return [extract_participants(p, client) for p in papers]
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("variation_id", type=int)
+    parser.add_argument("--model", default="qwen2.5:7b")
+    parser.add_argument("--backend", default="ollama", choices=["ollama", "hf"])
+    args = parser.parse_args()
+
+    counts = analyze_variation(args.variation_id, LLMClient(args.model, backend=args.backend))
+    for i, n in enumerate(counts, start=1):
+        print(f"Paper {i}: {n}")

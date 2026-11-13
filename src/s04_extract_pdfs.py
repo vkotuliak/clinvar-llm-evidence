@@ -1,67 +1,29 @@
+"""Stage 4: extract plain text from downloaded full-text PDFs."""
+
+from pathlib import Path
+
 import pymupdf
 
+from src.config import PAPERS_DIR
 
-def extract_pdf_content(file) -> str:
-    """
-    Extract text and images from a PDF file.
 
-    Args:
-        file (str): Path to the PDF file.
-    """
+def doi_to_pdf_path(doi: str, pdf_dir: Path = PAPERS_DIR) -> Path:
+    """Map a DOI (optionally as a doi.org URL) to the file name PyPaperBot uses with --use-doi-as-filename."""
+    bare = str(doi).replace("https://doi.org/", "").strip()
+    return Path(pdf_dir) / (bare.replace("/", "%2F") + ".pdf")
 
-    # Create a directory for the output based on the PDF file name
-    # file_stem = pathlib.Path(file).stem
-    # output_dir = pathlib.Path("pdf_contents") / file_stem
-    # output_dir.mkdir(parents=True, exist_ok=True)
 
+def extract_pdf_content(file) -> str | None:
+    """Return the text of a PDF, or ``None`` if the file is missing or cannot be parsed."""
     try:
-        pdf_file = pymupdf.open(file)
-    except pymupdf.FileNotFoundError as e:
-        print(f"File {file} was not found and caused {e}")
-        return "Not Provided \n"
-
-    text_content = ""
-
-    for page_index in range(len(pdf_file)):
-        page = pdf_file.load_page(page_index)
-        text_content += page.get_text()  # type: ignore
-
-        # image_list = page.get_images(full=True)
-
-        # if image_list:
-        #     print(f"Found {len(image_list)} images on page {page_index}")
-        # else:
-        #     print(f"No images found on page {page_index}")
-
-        # for image_index, img in enumerate(image_list):
-        #     xref = img[0]
-        #     base_image = pdf_file.extract_image(xref)
-        #     image_bytes = base_image["image"]
-        #     image_ext = base_image["ext"]
-
-        #     image_filename = f"image_page_{page_index}_img_{image_index}.{image_ext}"
-        #     with open(output_dir / image_filename, "wb") as image_file:
-        #         image_file.write(image_bytes)
-
-    pdf_file.close()
-
-    # with open(output_dir / "extracted_text.txt", "w", encoding="utf-8") as text_file:
-    #     text_file.write(text_content)
-
-    return text_content
+        with pymupdf.open(file) as pdf_file:
+            return "".join(page.get_text() for page in pdf_file)
+    except (FileNotFoundError, pymupdf.FileNotFoundError, pymupdf.FileDataError, RuntimeError) as e:
+        print(f"Could not read {file}: {e}")
+        return None
 
 
 if __name__ == "__main__":
-    """
-    Eventual real use case for extracting text from PDFs.
-
-    pdf_files = list(pathlib.Path("downloaded_papers").glob("*.pdf"))
-    for pdf_file in pdf_files:
-        print(f"Processing {pdf_file.name}")
-        extract_pdf_content(pdf_file)
-    print("PDF content extraction completed.")
-    """
-
-    # Example usage
-    example_pdf = "papers_by_doi/10.1194%2Fjlr.P081620.pdf"  # This one is corrupted
-    extract_pdf_content(example_pdf)
+    pdfs = sorted(PAPERS_DIR.glob("*.pdf"))
+    readable = sum(extract_pdf_content(p) is not None for p in pdfs)
+    print(f"{readable}/{len(pdfs)} PDFs in {PAPERS_DIR} could be read.")

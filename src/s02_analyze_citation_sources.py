@@ -1,5 +1,10 @@
+"""Exploration: how many ClinVar citations come from PubMed vs. other sources."""
+
 import gzip
+
 from lxml import etree
+
+from src.config import CLINVAR_XML_GZ
 
 
 def analyze_sources(in_file):
@@ -39,12 +44,14 @@ def analyze_sources(in_file):
         print(f"PubMed citations: {pubmed}")
         print(f"Other citations: {other}")
 
+
 """
 Results:
 PubMed citations: 1019311
 Other citations: 2728
 Ratio of PubMed to other sources: 373:1
 """
+
 
 def count_all_occurences(in_file):
     """Count all occurrences of citations in the XML file."""
@@ -80,6 +87,7 @@ def count_all_occurences(in_file):
         print(f"Total unique Other citations: {len(other_arcs)}")
     return count
 
+
 """
 Results:
 Total 3595245 elements processed
@@ -89,7 +97,4 @@ Ratio of PubMed to other sources: 69:1
 """
 
 if __name__ == "__main__":
-    in_file = "clinvar_dataset.xml.gz"
-    # in_file = "example.xml"
-    # analyze_sources(in_file)
-    count_all_occurences(in_file)
+    count_all_occurences(CLINVAR_XML_GZ)
