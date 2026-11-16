@@ -1,72 +1,44 @@
-import ast
+"""List variants for which every cited paper that has a DOI was downloaded as a PDF.
+
+1. Take each variant's PubMed citations from the ClinVar CSV.
+2. Look up the DOI of every citation in the PubMed abstracts CSV.
+3. Keep variants where all citations with a DOI have a PDF in ``papers_by_doi/``
+   and at least ``min_downloaded`` PDFs exist.
+"""
+
+import sys
+
 import pandas as pd
-import os
+
+from src.config import CLINVAR_CSV, PAPERS_DIR, PUBMED_ABSTRACTS_CSV
+from src.s04_extract_pdfs import doi_to_pdf_path
+from src.s05_data_preparation import safe_literal_eval
 
 
-"""
-1. Take the citation from the clinvar_csv_dataset file.
-2. Try to look it up in the pubmed_abstracts file.
-3. If it exists in pubmed_abstracts, try getting its doi
-4. Search paper by doi
+def find_downloaded_papers(min_downloaded: int = 4) -> list[int]:
+    clinvar_df = pd.read_csv(CLINVAR_CSV, usecols=["VariationID", "Citations"])
+    pubmed_df = pd.read_csv(PUBMED_ABSTRACTS_CSV, usecols=["PMID", "DOI"]).dropna(subset=["DOI"])
+    pmid_to_doi = dict(zip(pubmed_df["PMID"].astype(int), pubmed_df["DOI"], strict=True))
+    downloaded = {p.name for p in PAPERS_DIR.glob("*.pdf")}
 
-Save list of PubMed ids, for which for all citations which have doi, the paper is downloaded
-"""
-
-
-def check_if_paper_exists(doi: str, pdf_dir: str) -> bool:
-    """Checks if a PDF for a given DOI exists in the specified directory."""
-    if not doi or not isinstance(doi, str):
-        return False
-    # Sanitize DOI to create a valid filename
-    filename = doi.replace("https://doi.org/", "").replace("/", "%2F") + ".pdf"
-    filepath = os.path.join(pdf_dir, filename)
-    return os.path.exists(filepath)
-
-
-def find_downloaded_papers() -> list:
-    """
-    Identifies PubMed IDs from ClinVar for which a corresponding PDF has been downloaded.
-    """
-    clinvar_df = pd.read_csv("data/clinvar_csv_dataset.csv")
-    pubmed_df = pd.read_csv("data/pubmed_abstracts.csv")
-
-    pmids_w_downloaded = []
-    counter = 1
-    for pmed_ids, var_id in zip(clinvar_df["Citations"], clinvar_df["VariationID"]):
-
-        if counter % 100 == 0:
-            print(f"processing {counter}/10000")
-            print(pmids_w_downloaded)
-        counter += 1
-
-        # if downloaded_no + not_in_csv_no == total_no then all the present articles which have pubmed id were downloaded
-        total_no = len(ast.literal_eval(pmed_ids))
-        downloaded_no = 0
-        not_in_csv_no = 0
-
-        for p_id in ast.literal_eval(pmed_ids):
-            match = pubmed_df[
-                (pubmed_df["PMID"] == int(p_id))
-                & (pubmed_df["DOI"].notna())
-                & (pubmed_df["DOI"] != "")
-            ]
-            if not match.empty:
-                doi = match.iloc[0]["DOI"]
-                if check_if_paper_exists(doi, "papers_by_doi"):
-                    downloaded_no += 1
-            
-            elif match.empty:
-                not_in_csv_no += 1
-        
-        # if downloaded_no + not_in_csv_no == total_no and downloaded_no > 0:
-        #     pmids_w_downloaded.append(var_id)
-
-        if downloaded_no + not_in_csv_no == total_no and downloaded_no >= 4:
-            pmids_w_downloaded.append(var_id)
-
-    return pmids_w_downloaded
+    selected = []
+    total = len(clinvar_df)
+    for n, (var_id, citations) in enumerate(
+        zip(clinvar_df["VariationID"], clinvar_df["Citations"], strict=True), 1
+    ):
+        if n % 100_000 == 0:
+            print(f"processed {n}/{total}")
+        pmids = [int(p) for p in safe_literal_eval(citations)]
+        dois = [pmid_to_doi[p] for p in pmids if pmid_to_doi.get(p)]
+        if not dois:
+            continue
+        n_downloaded = sum(doi_to_pdf_path(d).name in downloaded for d in dois)
+        if n_downloaded == len(dois) and n_downloaded >= min_downloaded:
+            selected.append(int(var_id))
+    return selected
 
 
 if __name__ == "__main__":
-    downloaded_pmids = find_downloaded_papers()
-    print(f"Downloaded PMIDs: {downloaded_pmids}")
+    min_dl = int(sys.argv[1]) if len(sys.argv) > 1 else 4
+    variants = find_downloaded_papers(min_dl)
+    print(f"{len(variants)} variants with all papers downloaded: {variants[:50]}")

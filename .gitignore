@@ -1,9 +1,20 @@
-clinvar_dataset.xml.gz
+# Data (downloaded or generated - see README "Reproduce")
+data/*
+!data/example.xml
 *.csv
-.vscode/
-pubmed_xmls/
-downloaded_papers/
+*.xml.gz
 papers_by_doi/
-*.pdf
+downloaded_papers/
 pdf_contents/
+*.pdf
+
+# Python
 __pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

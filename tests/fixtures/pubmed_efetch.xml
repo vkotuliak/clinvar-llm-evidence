@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">12345</PMID>
+      <Article>
+        <ELocationID EIdType="doi" ValidYN="Y">10.1000/xyz123</ELocationID>
+        <ArticleTitle>A <i>BRCA1</i> variant in two families</ArticleTitle>
+        <Abstract>
+          <AbstractText Label="BACKGROUND">We studied <i>BRCA1</i> c.68_69del in <b>81 <sup>carriers</sup></b>.</AbstractText>
+          <AbstractText Label="RESULTS">It segregated with disease &amp; was absent from controls.</AbstractText>
+        </Abstract>
+      </Article>
+    </MedlineCitation>
+    <PubmedData><ArticleIdList><ArticleId IdType="pubmed">12345</ArticleId></ArticleIdList></PubmedData>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID Version="1">67890</PMID>
+      <Article><ArticleTitle>No abstract here</ArticleTitle></Article>
+    </MedlineCitation>
+    <PubmedData>
+      <ArticleIdList><ArticleId IdType="doi">10.2000/abc</ArticleId></ArticleIdList>
+    </PubmedData>
+  </PubmedArticle>
+</PubmedArticleSet>

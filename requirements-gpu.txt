@@ -1,0 +1,6 @@
+# Optional: Hugging Face backend (LLMClient(backend="hf")) for CUDA GPU servers.
+-r requirements.txt
+accelerate
+bitsandbytes
+torch
+transformers

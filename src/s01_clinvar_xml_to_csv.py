@@ -1,118 +1,125 @@
-import gzip
+"""Stage 1: stream the full ClinVar XML release into a flat CSV (one row per VariationArchive)."""
+
 import csv
+import gzip
+
 from lxml import etree
 
-def extract_variation_data(variation_elem):
-    """Extract all variation data from a VariationArchive element"""
-    record = {
-        'VariationID': variation_elem.get('VariationID', ''),
-        'VariationName': variation_elem.get('VariationName', ''),
-        'AlleleID': '',
-        'Type': variation_elem.get('VariationType', ''),
-        'GeneSymbol': '',
-        'ClinicalSignificance': '',
-        'ReviewStatus': '',
-        'Condition': '',
-        'HGVS_c': '',
-        'HGVS_p': '',
-        'dbSNP_ID': '',
-        'NumberOfSubmissions': '',
-        'Comment': '',
-        'Citations': []
-    }
-    
-    simple_allele = variation_elem.find('.//SimpleAllele')
-    if simple_allele is not None:
-        record['AlleleID'] = simple_allele.get('AlleleID', '')
+from src.config import CLINVAR_CSV, CLINVAR_XML_GZ
 
-        gene_elem = simple_allele.find('.//Gene')
+FIELDS = [
+    "VariationID",
+    "VariationName",
+    "AlleleID",
+    "Type",
+    "GeneSymbol",
+    "ClinicalSignificance",
+    "ReviewStatus",
+    "Condition",
+    "HGVS_c",
+    "HGVS_p",
+    "dbSNP_ID",
+    "NumberOfSubmissions",
+    "Comment",
+    "Citations",
+]
+
+
+def extract_variation_data(variation_elem) -> dict:
+    """Extract the fields in ``FIELDS`` from a ``VariationArchive`` element."""
+    record = {
+        "VariationID": variation_elem.get("VariationID", ""),
+        "VariationName": variation_elem.get("VariationName", ""),
+        "AlleleID": "",
+        "Type": variation_elem.get("VariationType", ""),
+        "GeneSymbol": "",
+        "ClinicalSignificance": "",
+        "ReviewStatus": "",
+        "Condition": "",
+        "HGVS_c": "",
+        "HGVS_p": "",
+        "dbSNP_ID": "",
+        "NumberOfSubmissions": "",
+        "Comment": [],
+        "Citations": [],
+    }
+
+    simple_allele = variation_elem.find(".//SimpleAllele")
+    if simple_allele is not None:
+        record["AlleleID"] = simple_allele.get("AlleleID", "")
+
+        gene_elem = simple_allele.find(".//Gene")
         if gene_elem is not None:
-            record['GeneSymbol'] = gene_elem.get('Symbol', '')
-        
+            record["GeneSymbol"] = gene_elem.get("Symbol", "")
+
         hgvs_coding = simple_allele.find('.//HGVS[@Type="coding"]/NucleotideExpression')
         if hgvs_coding is not None:
-            record['HGVS_c'] = hgvs_coding.get('change', '')
-        
+            record["HGVS_c"] = hgvs_coding.get("change", "")
+
         hgvs_protein = simple_allele.find('.//HGVS[@Type="coding"]/ProteinExpression')
         if hgvs_protein is not None:
-            record['HGVS_p'] = hgvs_protein.get('change', '')
-        
+            record["HGVS_p"] = hgvs_protein.get("change", "")
+
         dbsnp_xref = simple_allele.find('.//XRef[@DB="dbSNP"]')
         if dbsnp_xref is not None:
-            record['dbSNP_ID'] = dbsnp_xref.get('ID', '')
+            record["dbSNP_ID"] = dbsnp_xref.get("ID", "")
 
-    germline_class = variation_elem.find('.//Classifications/GermlineClassification')
+    germline_class = variation_elem.find(".//Classifications/GermlineClassification")
     if germline_class is not None:
-        desc_elem = germline_class.find('./Description')
+        desc_elem = germline_class.find("./Description")
         if desc_elem is not None:
-            record['ClinicalSignificance'] = desc_elem.text or ''
-        
-        review_elem = germline_class.find('./ReviewStatus')
+            record["ClinicalSignificance"] = desc_elem.text or ""
+
+        review_elem = germline_class.find("./ReviewStatus")
         if review_elem is not None:
-            record['ReviewStatus'] = review_elem.text or ''
-            
-    classified_condition = variation_elem.find('.//ClassifiedCondition')
+            record["ReviewStatus"] = review_elem.text or ""
+
+        record["NumberOfSubmissions"] = germline_class.get("NumberOfSubmissions", "") or ""
+
+    classified_condition = variation_elem.find(".//ClassifiedCondition")
     if classified_condition is not None:
-        record['Condition'] = classified_condition.text or ''
+        record["Condition"] = classified_condition.text or ""
 
-    number_of_submissions = variation_elem.find('.//Classifications/GermlineClassification')
-    if number_of_submissions is not None:
-        record['NumberOfSubmissions'] = number_of_submissions.get('NumberOfSubmissions', '') or ''
-    
-    comments = variation_elem.findall('.//Attribute[@Type="Description"]')
-    other_comments = variation_elem.findall('.//Comment', '')
-    record['Comment'] = []
-    if comments:
-        record['Comment'].extend([comment.text for comment in comments if comment.text])
-    if other_comments:
-        record['Comment'].extend([comment.text for comment in other_comments if comment.text])
+    for elem in variation_elem.findall('.//Attribute[@Type="Description"]'):
+        if elem.text:
+            record["Comment"].append(elem.text)
+    for elem in variation_elem.findall(".//Comment"):
+        if elem.text:
+            record["Comment"].append(elem.text)
 
-    citations = variation_elem.findall('.//Citation')
-    if citations:
-        id_elems = [citation.find('.//ID[@Source="PubMed"]') for citation in citations]
-        pubmed_ids = list(set([id_elem.text for id_elem in id_elems if id_elem is not None]))
-        if pubmed_ids:
-            record['Citations'] = pubmed_ids
+    pubmed_ids = {
+        id_elem.text for id_elem in variation_elem.findall('.//Citation/ID[@Source="PubMed"]') if id_elem.text
+    }
+    record["Citations"] = sorted(pubmed_ids, key=int) if pubmed_ids else []
 
     return record
 
-with gzip.open('clinvar_dataset.xml.gz', 'rb') as f_in, open('clinvar_csv_dataset.csv', 'w', newline='', encoding='utf-8') as f_out:
-    all_fields = [
-        'VariationID',
-        'VariationName',
-        'AlleleID', 
-        'Type',
-        'GeneSymbol',
-        'ClinicalSignificance',
-        'ReviewStatus',
-        'Condition',
-        'HGVS_c',
-        'HGVS_p',
-        'dbSNP_ID',
-        'NumberOfSubmissions',
-        'Comment',
-        'Citations'
-    ]
-    
-    writer = csv.DictWriter(f_out, fieldnames=all_fields)
-    writer.writeheader()
-    
-    context = etree.iterparse(f_in, events=('start', 'end'))
+
+def iter_variation_records(xml_file):
+    """Yield one record per ``VariationArchive``, clearing parsed elements to keep memory flat."""
+    context = etree.iterparse(xml_file, events=("end",), tag="VariationArchive")
+    for _, elem in context:
+        yield extract_variation_data(elem)
+        elem.clear()
+        while elem.getprevious() is not None:
+            del elem.getparent()[0]
+    del context
+
+
+def convert(in_path=CLINVAR_XML_GZ, out_path=CLINVAR_CSV) -> int:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    
-    for event, elem in context:
-        if event == 'end' and elem.tag == 'VariationArchive':
-            record = extract_variation_data(elem)
+    with gzip.open(in_path, "rb") as f_in, open(out_path, "w", newline="", encoding="utf-8") as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=FIELDS)
+        writer.writeheader()
+        for record in iter_variation_records(f_in):
             writer.writerow(record)
             count += 1
-            
-            if count % 1000 == 0:
-                print(f'Processed {count} elements')
-            
-            elem.clear()
-            while elem.getprevious() is not None:
-                del elem.getparent()[0]
-    
-    del context
-    print(f'Done. Total {count} elements processed.')
-    
+            if count % 10_000 == 0:
+                print(f"Processed {count} variations")
+    print(f"Done. Total {count} variations written to {out_path}")
+    return count
+
+
+if __name__ == "__main__":
+    convert()

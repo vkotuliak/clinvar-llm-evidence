@@ -1,13 +1,16 @@
+"""Write one bare DOI per line (input for PyPaperBot) from the PubMed abstracts CSV."""
+
 import pandas as pd
 
-df = pd.read_csv("data/pubmed_abstracts.csv")
+from src.config import DOIS_TXT, PUBMED_ABSTRACTS_CSV
 
-second_collumn = df.iloc[:, 1]
 
-with open("dois.txt", "w") as f:
-    for val in second_collumn:
-        if pd.isna(val):
-            continue
-        else:
-            clean_val = str(val).replace("https://doi.org/", "", 1)
-            f.write(f"{clean_val}\n")
+def main() -> None:
+    dois = pd.read_csv(PUBMED_ABSTRACTS_CSV, usecols=["DOI"])["DOI"].dropna()
+    dois = dois.astype(str).str.replace("https://doi.org/", "", n=1, regex=False).drop_duplicates()
+    DOIS_TXT.write_text("\n".join(dois) + "\n")
+    print(f"Wrote {len(dois)} DOIs to {DOIS_TXT}")
+
+
+if __name__ == "__main__":
+    main()
